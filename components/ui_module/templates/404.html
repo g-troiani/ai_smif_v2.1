@@ -1,0 +1,12 @@
+<!-- components/ui_module/templates/404.html -->
+{% extends "base.html" %}
+
+{% block title %}Page Not Found{% endblock %}
+
+{% block page_content %}
+<div class="text-center">
+    <h1>Page Not Found</h1>
+    <p>The requested page was not found on the server.</p>
+    <p><a href="{{ url_for('index') }}" class="btn btn-primary">Back to Home</a></p>
+</div>
+{% endblock %}

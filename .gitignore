@@ -1,0 +1,88 @@
+# Virtual Environment
+venv/
+env/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# Configuration
+config/*.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# .gitignore
+
+# Python
+*.pyc
+__pycache__/
+
+# Environment Variables
+.env
+
+# Logs
+*.log
+logs/
+
+# Virtual Environment
+venv/
+
+# Config Files
+config/*.ini
+
+
+# .gitignore
+
+# Python
+*.pyc
+__pycache__/
+
+# Environment Variables
+.env
+
+# Logs
+*.log
+logs/
+
+# Virtual Environment
+venv/
+
+# Config Files
+config/*.ini
+
+# .gitignore
+
+# Python
+*.pyc
+__pycache__/
+
+# Environment Variables
+.env
+
+# Logs
+*.log
+logs/
+
+# Virtual Environment
+venv/
+
+# Config Files
+config/*.ini

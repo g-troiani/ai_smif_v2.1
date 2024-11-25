@@ -1,0 +1,14 @@
+<!-- components/ui_module/templates/strategy.html -->
+{% extends "base.html" %}
+{% import "bootstrap/wtf.html" as wtf %}
+
+{% block title %}Configure Strategy{% endblock %}
+
+{% block page_content %}
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        <h2 class="mb-4">Configure Strategy</h2>
+        {{ wtf.quick_form(form) }}
+    </div>
+</div>
+{% endblock %}

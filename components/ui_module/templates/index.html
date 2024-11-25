@@ -1,0 +1,22 @@
+<!-- components/ui_module/templates/index.html -->
+{% extends "base.html" %}
+
+{% block title %}Home{% endblock %}
+
+{% block page_content %}
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        <h1 class="text-center mb-4">Welcome to the Trading App</h1>
+        <form id="add-ticker-form" class="mb-4">
+            <div class="form-group">
+                <label for="ticker-input">Add Ticker</label>
+                <input type="text" class="form-control" id="ticker-input" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Add</button>
+        </form>
+        <div class="text-center">
+            <a href="{{ url_for('strategy') }}" class="btn btn-primary">Configure Strategy</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

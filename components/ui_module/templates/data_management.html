@@ -1,0 +1,39 @@
+<!-- components/ui_module/templates/data_management.html -->
+{% extends "base.html" %}
+{% import "bootstrap/wtf.html" as wtf %}
+
+{% block title %}Data Management{% endblock %}
+
+{% block page_content %}
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">Data Configuration</div>
+            <div class="card-body">
+                {{ wtf.quick_form(form) }}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">Upload Ticker List</div>
+            <div class="card-body">
+                <form id="ticker-upload-form" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="ticker-file">Upload CSV File</label>
+                        <input type="file" class="form-control-file" id="ticker-file" accept=".csv" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Upload</button>
+                </form>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">Data Status</div>
+            <div class="card-body">
+                <p>Last Update: <span id="last-update">Never</span></p>
+                <p>Data Stream Status: <span id="stream-status" class="badge badge-secondary">Inactive</span></p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

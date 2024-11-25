@@ -1,0 +1,32 @@
+<!-- components/ui_module/templates/data_settings.html -->
+{% extends "base.html" %}
+{% import "bootstrap/wtf.html" as wtf %}
+
+{% block title %}Data Settings{% endblock %}
+
+{% block page_content %}
+<div class="container">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">Data Configuration</div>
+                <div class="card-body">
+                    {{ wtf.quick_form(form) }}
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">Data Status</div>
+                <div class="card-body">
+                    <p>Data Interval: 5 Minutes</p>
+                    <p>Historical Period: 5 Years</p>
+                    <p>Last Update: <span id="last-update">{{ last_update or 'Never' }}</span></p>
+                    <p>Records in Database: {{ data_count }}</p>
+                    <p>Data Stream Status: <span id="stream-status" class="badge badge-secondary">Inactive</span></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

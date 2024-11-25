@@ -1,0 +1,12 @@
+<!-- components/ui_module/templates/500.html -->
+{% extends "base.html" %}
+
+{% block title %}Server Error{% endblock %}
+
+{% block page_content %}
+<div class="text-center">
+    <h1>An unexpected error has occurred</h1>
+    <p>The server encountered an internal error. Please try again later.</p>
+    <p><a href="{{ url_for('index') }}" class="btn btn-primary">Back to Home</a></p>
+</div>
+{% endblock %}

@@ -1,0 +1,188 @@
+# components/data_management_module/alpaca_api.py
+
+import requests
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+import logging
+from .config import config
+
+class AlpacaAPIClient:
+    """Client for interacting with Alpaca's REST API"""
+    
+    def __init__(self):
+        self.logger = self._setup_logging()
+        self.base_url = config.get('api', 'base_url')
+        self.headers = {
+            'APCA_API_KEY_ID': config.get('api', 'key_id'),
+            'APCA_API_SECRET_KEY': config.get('api', 'secret_key')
+        }
+        
+        # Rate limiting settings
+        self.retry_count = config.get_int('api', 'rate_limit_retry_attempts')
+        self.retry_delay = config.get_int('api', 'rate_limit_retry_wait')
+        self.rate_limit_delay = config.get_float('api', 'rate_limit_delay')
+        self._last_request_time = 0
+
+    def _setup_logging(self):
+        """Set up logging for the API client"""
+        logger = logging.getLogger('alpaca_api')
+        logger.setLevel(logging.INFO)
+        handler = logging.FileHandler(config.get('DEFAULT', 'log_file'))
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logger.addHandler(handler)
+        return logger
+
+    def _respect_rate_limit(self):
+        """Implement rate limiting to avoid API throttling"""
+        now = time.time()
+        time_since_last = now - self._last_request_time
+        if time_since_last < self.rate_limit_delay:
+            sleep_time = self.rate_limit_delay - time_since_last
+            time.sleep(sleep_time)
+        self._last_request_time = time.time()
+
+    def fetch_historical_data(self, ticker, start_date, end_date):
+        """
+        Fetch historical data for a given ticker and date range
+        
+        Args:
+            ticker (str): Stock symbol
+            start_date (datetime): Start date for historical data
+            end_date (datetime): End date for historical data
+            
+        Returns:
+            pandas.DataFrame: Historical price data
+        """
+        all_data = []
+        current_start = start_date
+
+        while current_start < end_date:
+            current_end = min(current_start + timedelta(days=7), end_date)
+            chunk_data = self._fetch_data_chunk(ticker, current_start, current_end)
+            if not chunk_data.empty:
+                all_data.append(chunk_data)
+            current_start = current_end + timedelta(minutes=1)
+
+        if not all_data:
+            return pd.DataFrame()
+
+        # Concatenate all data chunks
+        data = pd.concat(all_data)
+
+        # Reset index to make 't' a column
+        data.reset_index(inplace=True)
+
+        # Rename columns to match expected format
+        data.rename(columns={
+            't': 'datetime',
+            'o': 'open',
+            'h': 'high',
+            'l': 'low',
+            'c': 'close',
+            'v': 'volume'
+        }, inplace=True)
+
+        # Set 'datetime' as index
+        data.set_index('datetime', inplace=True)
+
+        # Ensure index is of datetime type
+        data.index = pd.to_datetime(data.index)
+
+        # Sort data by date
+        data.sort_index(inplace=True)
+
+        return data
+
+    def _fetch_data_chunk(self, ticker, start_date, end_date):
+        """Fetch a chunk of historical data with retry logic"""
+        for attempt in range(self.retry_count):
+            try:
+                self._respect_rate_limit()
+                
+                params = {
+                    'start': start_date.isoformat(),
+                    'end': end_date.isoformat(),
+                    'timeframe': f"{config.get('DEFAULT', 'data_frequency_minutes')}Min",
+                    'limit': config.get('DEFAULT', 'batch_size')
+                }
+                
+                url = f"{self.base_url}/stocks/{ticker}/bars"
+                response = requests.get(url, headers=self.headers, params=params)
+                response.raise_for_status()
+                
+                data = response.json()
+                bars = data.get('bars', [])
+                
+                if not bars:
+                    self.logger.warning(f"No data returned for {ticker} between {start_date} and {end_date}")
+                    return pd.DataFrame()
+
+                df = pd.DataFrame(bars)
+                df['t'] = pd.to_datetime(df['t'])
+                df.set_index('t', inplace=True)
+                
+                self.logger.info(f"Successfully fetched {len(df)} bars for {ticker}")
+                return df
+
+            except requests.exceptions.RequestException as e:
+                self.logger.warning(f"Attempt {attempt + 1} failed for {ticker}: {str(e)}")
+                if attempt == self.retry_count - 1:
+                    self.logger.error(f"Failed to fetch data for {ticker} after {self.retry_count} attempts")
+                    raise
+                time.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
+
+    def verify_api_access(self):
+        """Verify API credentials and access"""
+        try:
+            response = requests.get(f"{self.base_url}/clock", headers=self.headers)
+            response.raise_for_status()
+            self.logger.info("API access verified successfully")
+            return True
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"API access verification failed: {str(e)}")
+            return False
+
+    def place_order(self, order_params):
+        """
+        Places an order using the Alpaca trading API.
+
+        Args:
+            order_params (dict): Dictionary containing order parameters.
+
+        Returns:
+            dict: Order response from Alpaca API.
+        """
+        url = f"{self.base_url}/v2/orders"
+        try:
+            self._respect_rate_limit()
+            response = requests.post(url, headers=self.headers, json=order_params)
+            response.raise_for_status()
+            order = response.json()
+            self.logger.info(f"Order placed successfully: {order}")
+            return order
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Error placing order: {e}")
+            raise
+
+    def get_order(self, order_id):
+        """
+        Retrieves an order by its ID.
+
+        Args:
+            order_id (str): The ID of the order to retrieve.
+
+        Returns:
+            dict: Order details from Alpaca API.
+        """
+        url = f"{self.base_url}/v2/orders/{order_id}"
+        try:
+            self._respect_rate_limit()
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status()
+            order = response.json()
+            self.logger.info(f"Order retrieved successfully: {order}")
+            return order
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Error retrieving order {order_id}: {e}")
+            raise
