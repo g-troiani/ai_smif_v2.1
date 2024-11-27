@@ -20,7 +20,7 @@ class HistoricalData(Base):
     __tablename__ = 'historical_data'
     id = Column(Integer, primary_key=True)
     ticker_symbol = Column(String, ForeignKey('tickers.symbol'))
-    timestamp = Column(DateTime, nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
     open = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
     low = Column(Float, nullable=False)
@@ -129,6 +129,40 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Error creating database session: {str(e)}")
             raise
+        
+    def save_real_time_data(self, bar):
+        """Save real-time streamed data as appended records to the database"""
+        session = self.Session()
+        try:
+            # Validate the data
+            HistoricalData.validate_price_data(
+                bar.open, bar.high, bar.low, bar.close, bar.volume
+            )
+
+            # Create a new HistoricalData record
+            data = HistoricalData(
+                ticker_symbol=bar.symbol,
+                timestamp=bar.timestamp,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume
+            )
+
+            # Add and commit the new record
+            session.add(data)
+            session.commit()
+            self.logger.info(f"Appended real-time data for {bar.symbol} at {bar.timestamp} to the database")
+        except IntegrityError as ie:
+            session.rollback()
+            self.logger.warning(f"Data for {bar.symbol} at {bar.timestamp} already exists in the database.")
+        except SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"Error saving real-time data: {str(e)}")
+            raise
+        finally:
+            session.close()
 
 # Global database manager instance
 db_manager = DatabaseManager()

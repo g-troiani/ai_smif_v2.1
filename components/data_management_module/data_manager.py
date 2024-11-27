@@ -23,7 +23,7 @@ class DataManager:
         self.logger = self._setup_logging()
         self.api_client = AlpacaAPIClient()
         self.lock = threading.RLock()
-        self.tickers = self._load_tickers()
+        self.load_tickers()
         self.real_time_streamer = None
         self.logger.info("DataManager initialized.")
         self._last_maintenance = None
@@ -39,25 +39,42 @@ class DataManager:
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         logger.addHandler(handler)
         return logger
+    
+    def load_tickers(self):
+        """Load tickers from the tickers file."""
+        tickers_file = Path(config.get('DEFAULT', 'tickers_file'))
+        if not tickers_file.exists():
+            self.logger.error(f"Tickers file not found: {tickers_file}")
+            raise FileNotFoundError(f"Tickers file not found: {tickers_file}")
+        
+        with open(tickers_file, 'r') as f:
+            self.tickers = [line.strip() for line in f if line.strip()]
+        self.logger.info(f"Loaded {len(self.tickers)} tickers: {self.tickers}")
 
-    def _load_tickers(self):
-        """Load tickers from the configured CSV file"""
-        try:
-            tickers_file = Path(config.get('DEFAULT', 'tickers_file'))
-            if not tickers_file.exists():
-                self.logger.error(f"Tickers file not found: {tickers_file}")
-                raise FileNotFoundError(f"Tickers file not found: {tickers_file}")
+    # def _load_tickers(self):
+    #     """Load tickers from the configured CSV file"""
+    #     try:
+    #         tickers_file = Path(config.get('DEFAULT', 'tickers_file'))
+    #         if not tickers_file.exists():
+    #             self.logger.error(f"Tickers file not found: {tickers_file}")
+    #             raise FileNotFoundError(f"Tickers file not found: {tickers_file}")
                 
-            df = pd.read_csv(tickers_file)
-            if 'ticker' not in df.columns:
-                raise ValueError("CSV file must contain a 'ticker' column")
+    #         df = pd.read_csv(tickers_file)
+    #         if 'ticker' not in df.columns:
+    #             raise ValueError("CSV file must contain a 'ticker' column")
                 
-            tickers = df['ticker'].unique().tolist()
-            self.logger.info(f"Loaded {len(tickers)} tickers")
-            return tickers
-        except Exception as e:
-            self.logger.error(f"Failed to load tickers: {str(e)}")
-            raise
+    #         tickers = df['ticker'].unique().tolist()
+    #         self.logger.info(f"Loaded {len(tickers)} tickers")
+    #         return tickers
+    #     except Exception as e:
+    #         self.logger.error(f"Failed to load tickers: {str(e)}")
+    #         raise
+        
+    # def reload_tickers(self):
+    #     """Reload tickers from the tickers file dynamically."""
+    #     with self.lock:
+    #         self.load_tickers()
+    #         print("Tickers reloaded.")
 
 
     def initialize_database(self):
@@ -110,29 +127,36 @@ class DataManager:
         return data
 
 
-    def fetch_historical_data(self, ticker, start_date, end_date, timeframe='5Min'):
-        """Fetch historical data with proper formatting"""
-        all_data = []
-        current_date = start_date
+    def fetch_historical_data_for_ticker(self, ticker_symbol):
+        """Fetch and store historical data for a single ticker."""
+        try:
+            with self.lock:
+                ny_tz = pytz.timezone('America/New_York')
+                end_date = datetime.now(ny_tz)
+                years = config.get_int('DEFAULT', 'historical_data_years')
+                start_date = end_date - relativedelta(years=years)
+
+                self.logger.info(f"Fetching historical data for {ticker_symbol}")
+
+                historical_data = self.api_client.fetch_historical_data(
+                    ticker_symbol, start_date, end_date, timeframe='5Min'
+                )
+
+                if not historical_data.empty:
+                    historical_data = self._filter_market_hours(historical_data, ny_tz)
+                    self._save_historical_data(ticker_symbol, historical_data)
+                    self.logger.info(f"Historical data for {ticker_symbol} fetched and stored.")
+                    print(f"Historical data for {ticker_symbol} fetched and stored.")
+                else:
+                    self.logger.warning(f"No historical data fetched for {ticker_symbol}")
+                    print(f"No historical data fetched for {ticker_symbol}")
+        except Exception as e:
+            self.logger.error(f"Error fetching data for {ticker_symbol}: {str(e)}")
+            print(f"Error fetching data for {ticker_symbol}: {str(e)}")
         
-        while current_date < end_date:
-            chunk_end = min(current_date + timedelta(days=self.chunk_size), end_date)
-            chunk_data = self._fetch_data_chunk(ticker, current_date, chunk_end, timeframe)
-            
-            if not chunk_data.empty:
-                all_data.append(chunk_data)
-            current_date = chunk_end + timedelta(seconds=1)  # Avoid overlapping
-
-        final_data = pd.concat(all_data) if all_data else pd.DataFrame()
-        print(f"CRITICAL DEBUG: Final data shape={final_data.shape}, columns={final_data.columns.tolist()}")
-
-        if not final_data.empty:
-            earliest_date = final_data.index.min()
-            latest_date = final_data.index.max()
-            print(f"CRITICAL DEBUG: Data ranges from {earliest_date} to {latest_date}")
-
-        return final_data
-
+    def fetch_historical_data_async(self, ticker_symbol):
+        """Fetch historical data for a ticker asynchronously."""
+        threading.Thread(target=self.fetch_historical_data_for_ticker, args=(ticker_symbol,)).start()
 
     def _store_historical_data(self, ticker, df):
         """Store historical data in the database"""
@@ -186,6 +210,7 @@ class DataManager:
             self.logger.warning("Real-time streamer is already running")
 
 
+
     def stop_real_time_streaming(self):
         """Stop real-time data streaming"""
         if self.real_time_streamer:
@@ -196,21 +221,21 @@ class DataManager:
             except Exception as e:
                 self.logger.error(f"Error stopping real-time stream: {str(e)}")
                 raise
-
     def perform_maintenance(self):
         """Perform database maintenance"""
         try:
             current_time = datetime.now()
-            # Only perform maintenance if it hasn't been done in the last 24 hours
             if (self._last_maintenance is None or 
                 (current_time - self._last_maintenance).total_seconds() > 86400):
                 
-                db_manager.cleanup_old_data()
+                # Disable the cleanup to retain all data
+                # db_manager.cleanup_old_data()
                 self._last_maintenance = current_time
-                self.logger.info("Completed database maintenance")
+                self.logger.info("Performed maintenance without data cleanup")
         except Exception as e:
             self.logger.error(f"Error during maintenance: {str(e)}")
             raise
+
 
     def get_historical_data(self, ticker, start_date, end_date):
         """Retrieve historical data for a specific ticker and date range"""
@@ -395,3 +420,49 @@ class DataManager:
         except Exception as e:
             self.logger.error(f"Error in fetch_historical_data for {ticker}: {e}")
             raise
+        
+    def fetch_historical_data_for_ticker(self, ticker_symbol):
+        """Fetch and store historical data for a single ticker."""
+        try:
+            with self.lock:
+                ny_tz = pytz.timezone('America/New_York')
+                end_date = datetime.now(ny_tz)
+                years = config.get_int('DEFAULT', 'historical_data_years')
+                start_date = end_date - relativedelta(years=years)
+
+                self.logger.info(f"Fetching historical data for {ticker_symbol}")
+
+                historical_data = self.api_client.fetch_historical_data(
+                    ticker_symbol, start_date, end_date, timeframe='5Min'
+                )
+
+                if not historical_data.empty:
+                    historical_data = self._filter_market_hours(historical_data, ny_tz)
+                    self._save_historical_data(ticker_symbol, historical_data)
+                    self.logger.info(f"Historical data for {ticker_symbol} fetched and stored.")
+                    print(f"Historical data for {ticker_symbol} fetched and stored.")
+                else:
+                    self.logger.warning(f"No historical data fetched for {ticker_symbol}")
+                    print(f"No historical data fetched for {ticker_symbol}")
+        except Exception as e:
+            self.logger.error(f"Error fetching data for {ticker_symbol}: {str(e)}")
+            print(f"Error fetching data for {ticker_symbol}: {str(e)}")
+
+    def fetch_historical_data_async(self, ticker_symbol):
+        """Fetch historical data for a ticker asynchronously."""
+        threading.Thread(target=self.fetch_historical_data_for_ticker, args=(ticker_symbol,)).start()
+        
+    def add_new_ticker(self, ticker_symbol):
+        """Add a new ticker, reload tickers, and fetch historical data."""
+        tickers_file = config.get('DEFAULT', 'tickers_file')
+        ticker_added = append_ticker_to_csv(ticker_symbol, tickers_file)
+        if ticker_added:
+            self.reload_tickers()
+            self.fetch_historical_data_async(ticker_symbol)
+            # Update the real-time streamer
+            if self.real_time_streamer:
+                self.real_time_streamer.update_tickers(self.tickers)
+            print(f"Ticker {ticker_symbol} added and data retrieval initiated.")
+        else:
+            print(f"Ticker {ticker_symbol} was not added.")
+

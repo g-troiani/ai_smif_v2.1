@@ -54,56 +54,65 @@ class RealTimeDataStreamer:
         return market_open <= ny_time <= market_close
 
     async def handle_bar(self, bar):
-        """Handle incoming bar data"""
         try:
             if not await self._is_market_hours():
                 return
 
-            current_time = datetime.now(pytz.UTC)
-            last_update = self._last_update.get(bar.symbol)
-            
-            # Only process if 5 minutes have passed since last update
-            if (last_update is None or 
-                current_time - last_update >= self._interval):
-                
-                # Validate the data
-                HistoricalData.validate_price_data(
-                    bar.open, bar.high, bar.low, bar.close, bar.volume
-                )
-                
-                # Store and publish
-                await self._store_bar_data(bar)
-                await self._publish_bar_data(bar)
-                
-                self._last_update[bar.symbol] = current_time
+            # Convert bar.timestamp from nanoseconds to datetime
+            bar.timestamp = datetime.datetime.fromtimestamp(bar.timestamp / 1e9, tz=pytz.UTC)
+
+            # Get the minute of the timestamp
+            minute = bar.timestamp.minute
+
+            # Check if the minute is a multiple of 5
+            if minute % 5 == 0:
+                # Process the bar
+                self._store_bar_data(bar)
+                self._publish_bar_data(bar)
+                self._last_update[bar.symbol] = bar.timestamp
                 self._last_prices[bar.symbol] = bar.close
-                
+            else:
+                # Do not process the bar
+                pass
+
         except Exception as e:
             self.logger.error(f"Error processing bar data: {str(e)}")
 
+
+    # def _store_bar_data(self, bar):
+    #     """Store bar data in the database"""
+    #     try:
+    #         record = HistoricalData(
+    #             ticker_symbol=bar.symbol,
+    #             timestamp=bar.timestamp,
+    #             open=bar.open,
+    #             high=bar.high,
+    #             low=bar.low,
+    #             close=bar.close,
+    #             volume=bar.volume
+    #         )
+            
+    #         session = db_manager.Session()
+    #         try:
+    #             session.add(record)
+    #             session.commit()
+    #             self.logger.debug(f"Stored bar data for {bar.symbol}")
+    #         finally:
+    #             session.close()
+                
+    #     except Exception as e:
+    #         self.logger.error(f"Failed to store bar data: {str(e)}")
+    
     def _store_bar_data(self, bar):
         """Store bar data in the database"""
         try:
-            record = HistoricalData(
-                ticker_symbol=bar.symbol,
-                timestamp=bar.timestamp,
-                open=bar.open,
-                high=bar.high,
-                low=bar.low,
-                close=bar.close,
-                volume=bar.volume
-            )
-            
-            session = db_manager.Session()
-            try:
-                session.add(record)
-                session.commit()
-                self.logger.debug(f"Stored bar data for {bar.symbol}")
-            finally:
-                session.close()
-                
+            # Save real-time data using db_manager
+            db_manager.save_real_time_data(bar)
+            # Log confirmation
+            self.logger.info(f"Stored real-time data for {bar.symbol} at {bar.timestamp}")
         except Exception as e:
             self.logger.error(f"Failed to store bar data: {str(e)}")
+
 
     def _publish_bar_data(self, bar):
         """Publish bar data through ZeroMQ"""
@@ -117,12 +126,14 @@ class RealTimeDataStreamer:
                 'close': bar.close,
                 'volume': bar.volume
             }
-            
+
             topic = f"{config.get('DEFAULT', 'zeromq_topic')}.{bar.symbol}"
             self.publisher.send_string(f"{topic} {json.dumps(message)}")
-            
+            self.logger.debug(f"Published bar data for {bar.symbol}")
+
         except Exception as e:
             self.logger.error(f"Failed to publish bar data: {str(e)}")
+
 
     def start(self):
         """Start the real-time data streaming"""
@@ -146,7 +157,6 @@ class RealTimeDataStreamer:
             self._running = False
             self.logger.error(f"Stream error: {str(e)}")
             raise
-
     def _run_stream(self):
         """Run the stream in the event loop"""
         try:
@@ -170,3 +180,19 @@ class RealTimeDataStreamer:
             self.logger.info("Stopped real-time data streaming")
         except Exception as e:
             self.logger.error(f"Error stopping stream: {str(e)}")
+
+    def update_tickers(self, new_tickers):
+        """Update the list of tickers to stream."""
+        with threading.Lock():
+            # Unsubscribe from tickers no longer in the list
+            for ticker in set(self.tickers) - set(new_tickers):
+                self.stream.unsubscribe_bars(ticker)
+                self.logger.info(f"Unsubscribed from bars for {ticker}")
+
+            # Subscribe to new tickers
+            for ticker in set(new_tickers) - set(self.tickers):
+                self.stream.subscribe_bars(self.handle_bar, ticker)
+                self.logger.info(f"Subscribed to bars for {ticker}")
+
+            self.tickers = new_tickers
+            print("Tickers updated for streaming.")
