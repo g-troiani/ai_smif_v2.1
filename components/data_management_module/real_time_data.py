@@ -4,12 +4,13 @@ import zmq
 import json
 import threading
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 from alpaca_trade_api.stream import Stream
 from alpaca_trade_api.common import URL
 from .config import config
 from .data_access_layer import db_manager, HistoricalData
+import pytz
 
 class RealTimeDataStreamer:
     """Handles real-time market data streaming using ZeroMQ for internal distribution"""
@@ -33,6 +34,8 @@ class RealTimeDataStreamer:
         
         self._running = False
         self._last_prices = {}
+        self._last_update = {}
+        self._interval = timedelta(minutes=5)
 
     def _setup_logging(self):
         """Set up logging for the real-time data streamer"""
@@ -43,25 +46,38 @@ class RealTimeDataStreamer:
         logger.addHandler(handler)
         return logger
 
+    async def _is_market_hours(self):
+        """Check if current time is within market hours"""
+        ny_time = datetime.now(pytz.timezone('America/New_York'))
+        market_open = ny_time.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = ny_time.replace(hour=16, minute=0, second=0, microsecond=0)
+        return market_open <= ny_time <= market_close
+
     async def handle_bar(self, bar):
-        """Handle incoming bar data from Alpaca"""
+        """Handle incoming bar data"""
         try:
-            # Validate the data
-            HistoricalData.validate_price_data(
-                bar.open, bar.high, bar.low, bar.close, bar.volume
-            )
+            if not await self._is_market_hours():
+                return
+
+            current_time = datetime.now(pytz.UTC)
+            last_update = self._last_update.get(bar.symbol)
             
-            # Store in database
-            self._store_bar_data(bar)
-            
-            # Publish to ZeroMQ
-            self._publish_bar_data(bar)
-            
-            # Update last known price
-            self._last_prices[bar.symbol] = bar.close
-            
-        except ValueError as e:
-            self.logger.warning(f"Invalid bar data received for {bar.symbol}: {str(e)}")
+            # Only process if 5 minutes have passed since last update
+            if (last_update is None or 
+                current_time - last_update >= self._interval):
+                
+                # Validate the data
+                HistoricalData.validate_price_data(
+                    bar.open, bar.high, bar.low, bar.close, bar.volume
+                )
+                
+                # Store and publish
+                await self._store_bar_data(bar)
+                await self._publish_bar_data(bar)
+                
+                self._last_update[bar.symbol] = current_time
+                self._last_prices[bar.symbol] = bar.close
+                
         except Exception as e:
             self.logger.error(f"Error processing bar data: {str(e)}")
 

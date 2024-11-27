@@ -3,32 +3,40 @@
 import pandas as pd
 import threading
 import logging
-from datetime import datetime, timedelta
-import time
+from datetime import datetime, timedelta, time
+import time as time_module  # Alias to avoid conflict with datetime.time
 from pathlib import Path
 from .config import config
 from .alpaca_api import AlpacaAPIClient
 from .data_access_layer import db_manager, Ticker, HistoricalData
 from .real_time_data import RealTimeDataStreamer
+import pytz
+from dateutil.relativedelta import relativedelta  # Added for accurate date calculations
+from sqlalchemy.exc import IntegrityError        # Added for handling database integrity errors
+import traceback         
+
 
 class DataManager:
     """Main class for managing market data operations"""
-    
+
     def __init__(self):
         self.logger = self._setup_logging()
         self.api_client = AlpacaAPIClient()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.tickers = self._load_tickers()
         self.real_time_streamer = None
+        self.logger.info("DataManager initialized.")
         self._last_maintenance = None
         self.initialize_database()
+        self.start_real_time_streaming()
 
     def _setup_logging(self):
         """Set up logging for the data manager"""
         logger = logging.getLogger('data_manager')
         logger.setLevel(logging.INFO)
         handler = logging.FileHandler(config.get('DEFAULT', 'log_file'))
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         logger.addHandler(handler)
         return logger
 
@@ -51,49 +59,80 @@ class DataManager:
             self.logger.error(f"Failed to load tickers: {str(e)}")
             raise
 
+
     def initialize_database(self):
-        """Initialize database with tickers"""
+        """Initialize database with historical data"""
         try:
             with self.lock:
-                session = db_manager.Session()
-                try:
-                    for ticker in self.tickers:
-                        if not session.query(Ticker).filter_by(symbol=ticker).first():
-                            session.add(Ticker(symbol=ticker))
-                    session.commit()
-                    self.logger.info("Database initialized with tickers")
-                except Exception as e:
-                    session.rollback()
-                    self.logger.error(f"Database initialization error: {str(e)}")
-                    raise
-                finally:
-                    session.close()
+                print(f"CRITICAL DEBUG: Starting database initialization")
+                ny_tz = pytz.timezone('America/New_York')
+                end_date = datetime.now(ny_tz)
+                
+                # Retrieve the number of years from the configuration
+                years = config.get_int('DEFAULT', 'historical_data_years')
+                start_date = end_date - relativedelta(years=years)  # Use relativedelta for accurate year subtraction
+
+                # Print the date range for debugging
+                print(f"CRITICAL DEBUG: Date range from {start_date} to {end_date}")
+
+                for ticker in self.tickers:
+                    self.logger.info(f"Fetching historical data for {ticker}")
+
+                    # Fetch and store historical data
+                    historical_data = self.api_client.fetch_historical_data(
+                        ticker, start_date, end_date, timeframe='5Min'
+                    )
+
+                    print(f"CRITICAL DEBUG: Got data empty={historical_data.empty}")
+
+                    if not historical_data.empty:
+                        # Filter data to market hours (9:30 AM to 4:00 PM EST)
+                        historical_data = self._filter_market_hours(historical_data, ny_tz)
+                        self._save_historical_data(ticker, historical_data)
+
+                    # Respect rate limits
+                    time_module.sleep(1)  # Ensure 'time_module' is correctly imported
+
         except Exception as e:
-            self.logger.error(f"Failed to initialize database: {str(e)}")
+            self.logger.error(f"Error initializing database: {str(e)}")
             raise
 
-    def fetch_historical_data(self):
-        """Fetch historical data for all tickers"""
-        years = config.get_int('DEFAULT', 'historical_data_years')
-        start_date = datetime.now() - timedelta(days=years * 365)
-        end_date = datetime.now()
 
-        for ticker in self.tickers:
-            try:
-                self.logger.info(f"Fetching historical data for {ticker}")
-                df = self.api_client.fetch_historical_data(ticker, start_date, end_date)
-                
-                if df is not None and not df.empty:
-                    self._store_historical_data(ticker, df)
-                    self.logger.info(f"Stored historical data for {ticker}")
-                else:
-                    self.logger.warning(f"No historical data available for {ticker}")
+
+
                     
-                # Respect rate limits
-                time.sleep(1)
-                
-            except Exception as e:
-                self.logger.error(f"Error processing {ticker}: {str(e)}")
+    def _filter_market_hours(self, data, timezone):
+        """Filter data to only include market hours (9:30 AM to 4:00 PM EST)"""
+        market_open = time(9, 30)    # Corrected from datetime_time(9, 30)
+        market_close = time(16, 0)   # Corrected from datetime_time(16, 0)
+        data = data.tz_convert(timezone)
+        data = data.between_time(market_open, market_close)
+        return data
+
+
+    def fetch_historical_data(self, ticker, start_date, end_date, timeframe='5Min'):
+        """Fetch historical data with proper formatting"""
+        all_data = []
+        current_date = start_date
+        
+        while current_date < end_date:
+            chunk_end = min(current_date + timedelta(days=self.chunk_size), end_date)
+            chunk_data = self._fetch_data_chunk(ticker, current_date, chunk_end, timeframe)
+            
+            if not chunk_data.empty:
+                all_data.append(chunk_data)
+            current_date = chunk_end + timedelta(seconds=1)  # Avoid overlapping
+
+        final_data = pd.concat(all_data) if all_data else pd.DataFrame()
+        print(f"CRITICAL DEBUG: Final data shape={final_data.shape}, columns={final_data.columns.tolist()}")
+
+        if not final_data.empty:
+            earliest_date = final_data.index.min()
+            latest_date = final_data.index.max()
+            print(f"CRITICAL DEBUG: Data ranges from {earliest_date} to {latest_date}")
+
+        return final_data
+
 
     def _store_historical_data(self, ticker, df):
         """Store historical data in the database"""
@@ -133,17 +172,19 @@ class DataManager:
 
     def start_real_time_streaming(self):
         """Start real-time data streaming"""
-        if self.real_time_streamer is None:
+        if not self.real_time_streamer:
+            self.logger.info("Starting real-time data streaming")
             try:
                 self.real_time_streamer = RealTimeDataStreamer(self.tickers)
                 # Start the streamer in a separate thread to make it non-blocking
                 threading.Thread(target=self.real_time_streamer.start, daemon=True).start()
-                self.logger.info("Started real-time data streaming")
+                self.logger.info("Real-time streaming started successfully")
             except Exception as e:
                 self.logger.error(f"Failed to start real-time streaming: {str(e)}")
                 raise
         else:
             self.logger.warning("Real-time streamer is already running")
+
 
     def stop_real_time_streaming(self):
         """Stop real-time data streaming"""
@@ -259,3 +300,98 @@ class DataManager:
             self.logger.error(f"Error retrieving backtrader data for {ticker}: {str(e)}")
             # Return empty DataFrame instead of raising to maintain compatibility
             return pd.DataFrame()
+
+    def _save_historical_data(self, ticker, df):
+        """Store historical data in the database"""
+        with self.lock:
+            session = db_manager.Session()
+            try:
+                records = []
+                for index, row in df.iterrows():
+                    try:
+                        # Updated column names to match DataFrame
+                        HistoricalData.validate_price_data(
+                            row['open'], row['high'], row['low'], row['close'], row['volume']
+                        )
+                        record = HistoricalData(
+                            ticker_symbol=ticker,
+                            timestamp=index,
+                            open=row['open'],
+                            high=row['high'],
+                            low=row['low'],
+                            close=row['close'],
+                            volume=row['volume']
+                        )
+                        records.append(record)
+                    except ValueError as e:
+                        self.logger.warning(f"Skipping invalid data point for {ticker}: {str(e)}")
+                        print(f"CRITICAL DEBUG: Skipping invalid data point for {ticker}: {str(e)}")
+
+                if records:
+                    batch_size = config.get_int('DEFAULT', 'batch_size')  # Use batch_size from config
+                    num_records = len(records)
+                    print(f"CRITICAL DEBUG: Attempting to save {num_records} records for {ticker}")
+
+                    for i in range(0, num_records, batch_size):
+                        batch = records[i:i+batch_size]
+                        try:
+                            session.bulk_save_objects(batch)
+                            session.commit()
+                            print(f"CRITICAL DEBUG: Successfully saved batch {i//batch_size +1} with {len(batch)} records")
+                        except IntegrityError as ie:
+                            session.rollback()
+                            self.logger.warning(f"IntegrityError when saving batch {i//batch_size +1} for {ticker}: {str(ie)}")
+                            print(f"CRITICAL DEBUG: IntegrityError when saving batch {i//batch_size +1} for {ticker}: {str(ie)}")
+                        except Exception as e:
+                            session.rollback()
+                            self.logger.error(f"Exception when saving batch {i//batch_size +1} for {ticker}: {str(e)}")
+                            print(f"CRITICAL DEBUG: Exception when saving batch {i//batch_size +1} for {ticker}: {str(e)}")
+                            traceback.print_exc()
+                            raise
+
+                self.logger.info(f"Stored {len(records)} records for {ticker}")
+                print(f"CRITICAL DEBUG: Stored {len(records)} records for {ticker}")
+                    
+            except Exception as e:
+                session.rollback()
+                self.logger.error(f"Database error for {ticker}: {str(e)}")
+                print(f"CRITICAL DEBUG: Database error for {ticker}: {str(e)}")
+                raise
+            finally:
+                session.close()
+                print("CRITICAL DEBUG: Database session closed.")
+
+
+
+    def __del__(self):
+        """Cleanup when the object is destroyed"""
+        try:
+            self.stop_real_time_streaming()
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {str(e)}")
+
+    def _fetch_historical_data(self, ticker):
+        """Fetch historical data for a ticker"""
+        try:
+            end_date = datetime.now(pytz.timezone('US/Eastern'))
+            start_date = end_date - timedelta(days=5*365)  # 5 years
+            
+            self.logger.info(f"Fetching data for {ticker}")
+            data = self.alpaca_client.fetch_historical_data(
+                ticker,
+                start_date,
+                end_date,
+                timeframe='1Day'
+            )
+            
+            if not data.empty:
+                self.logger.info(f"Storing {len(data)} records for {ticker}")
+                self._save_historical_data(ticker, data)
+                self.logger.info(f"Successfully stored data for {ticker}")
+            else:
+                self.logger.warning(f"No data received for {ticker}")
+                
+            return data
+        except Exception as e:
+            self.logger.error(f"Error in fetch_historical_data for {ticker}: {e}")
+            raise

@@ -100,5 +100,5 @@ def concatenate_scripts(target_folder):
     print(f"Scripts concatenated into '{output_file_name}'.")
 
 if __name__ == "__main__":
-    target_folder = "components/trading_execution_engine"
+    target_folder = "components/data_management_module"
     concatenate_scripts(target_folder)

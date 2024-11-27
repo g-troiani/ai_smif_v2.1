@@ -3,7 +3,7 @@
 from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, UniqueConstraint, func, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from datetime import datetime, timedelta
 import logging
 from .config import config
@@ -43,7 +43,13 @@ class HistoricalData(Base):
 
 class DatabaseManager:
     def __init__(self):
-        self.engine = create_engine(f"sqlite:///{config.get('DEFAULT', 'database_path')}")
+        self.engine = create_engine(
+            f"sqlite:///{config.get('DEFAULT', 'database_path')}",
+            connect_args={'check_same_thread': False, 'timeout': 15}  # Added parameters
+        )
+        # Optionally set journal mode to WAL to improve concurrency
+        with self.engine.connect() as conn:
+            conn.execute(text('PRAGMA journal_mode=WAL;'))
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self._setup_logging()
@@ -114,6 +120,15 @@ class DatabaseManager:
             raise
         finally:
             session.close()
+
+    def create_session(self):
+        """Create and return a new database session"""
+        try:
+            session = self.Session()
+            return session
+        except Exception as e:
+            self.logger.error(f"Error creating database session: {str(e)}")
+            raise
 
 # Global database manager instance
 db_manager = DatabaseManager()
