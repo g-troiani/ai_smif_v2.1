@@ -4,16 +4,18 @@ import pandas as pd
 import threading
 import logging
 from datetime import datetime, timedelta, time
-import time as time_module  # Alias to avoid conflict with datetime.time
+import time as time_module  # to avoid conflict with datetime.time
 from pathlib import Path
 from .config import config
 from .alpaca_api import AlpacaAPIClient
 from .data_access_layer import db_manager, Ticker, HistoricalData
 from .real_time_data import RealTimeDataStreamer
 import pytz
-from dateutil.relativedelta import relativedelta  # Added for accurate date calculations
-from sqlalchemy.exc import IntegrityError        # Added for handling database integrity errors
+from dateutil.relativedelta import relativedelta  # for accurate date calculations
+from sqlalchemy.exc import IntegrityError        # for handling database integrity errors
 import traceback         
+from datetime import datetime, timedelta
+import threading
 
 
 class DataManager:
@@ -85,14 +87,28 @@ class DataManager:
                 ny_tz = pytz.timezone('America/New_York')
                 end_date = datetime.now(ny_tz)
                 
-                # Retrieve the number of years from the configuration
-                years = config.get_int('DEFAULT', 'historical_data_years')
-                start_date = end_date - relativedelta(years=years)  # Use relativedelta for accurate year subtraction
-
-                # Print the date range for debugging
-                print(f"CRITICAL DEBUG: Date range from {start_date} to {end_date}")
-
                 for ticker in self.tickers:
+                    print(f"CRITICAL DEBUG: Processing ticker {ticker}")
+                    # Get the last record timestamp
+                    last_timestamp = self.get_last_record_timestamp(ticker)
+                    
+                    if last_timestamp:
+                        # If we have data, start from the last record
+                        # Add a small buffer (1 bar) to ensure we don't miss any data
+                        start_date = last_timestamp - timedelta(minutes=5)
+                        print(f"CRITICAL DEBUG: Found last record for {ticker}, starting from {start_date}")
+                        print(f"CRITICAL DEBUG: Start date timezone info: {start_date.tzinfo}")
+                    else:
+                        # If no existing data, fetch historical data for configured years
+                        years = config.get_int('DEFAULT', 'historical_data_years')
+                        start_date = end_date - relativedelta(years=years)  # Will inherit timezone from end_date
+                        print(f"CRITICAL DEBUG: No existing data for {ticker}, fetching {years} years of history")
+                        print(f"CRITICAL DEBUG: Start date timezone info: {start_date.tzinfo}")
+
+                    # Print the date range for debugging
+                    print(f"CRITICAL DEBUG: Date range from {start_date} to {end_date}")
+                    print(f"CRITICAL DEBUG: End date timezone info: {end_date.tzinfo}")
+
                     self.logger.info(f"Fetching historical data for {ticker}")
 
                     # Fetch and store historical data
@@ -106,16 +122,19 @@ class DataManager:
                         # Filter data to market hours (9:30 AM to 4:00 PM EST)
                         historical_data = self._filter_market_hours(historical_data, ny_tz)
                         self._save_historical_data(ticker, historical_data)
+                        print(f"CRITICAL DEBUG: Saved {len(historical_data)} records for {ticker}")
+                    else:
+                        print(f"CRITICAL DEBUG: No data to save for {ticker}")
 
                     # Respect rate limits
                     time_module.sleep(1)  # Ensure 'time_module' is correctly imported
 
+                print("CRITICAL DEBUG: Database initialization completed")
+
         except Exception as e:
             self.logger.error(f"Error initializing database: {str(e)}")
+            print(f"CRITICAL DEBUG: Error during initialization: {str(e)}")
             raise
-
-
-
 
                     
     def _filter_market_hours(self, data, timezone):
@@ -209,8 +228,6 @@ class DataManager:
         else:
             self.logger.warning("Real-time streamer is already running")
 
-
-
     def stop_real_time_streaming(self):
         """Stop real-time data streaming"""
         if self.real_time_streamer:
@@ -221,6 +238,7 @@ class DataManager:
             except Exception as e:
                 self.logger.error(f"Error stopping real-time stream: {str(e)}")
                 raise
+
     def perform_maintenance(self):
         """Perform database maintenance"""
         try:
@@ -230,6 +248,11 @@ class DataManager:
                 
                 # Disable the cleanup to retain all data
                 # db_manager.cleanup_old_data()
+                
+                # Verify data continuity for all tickers
+                for ticker in self.tickers:
+                    self.verify_data_continuity(ticker)
+                
                 self._last_maintenance = current_time
                 self.logger.info("Performed maintenance without data cleanup")
         except Exception as e:
@@ -387,7 +410,6 @@ class DataManager:
                 print("CRITICAL DEBUG: Database session closed.")
 
 
-
     def __del__(self):
         """Cleanup when the object is destroyed"""
         try:
@@ -427,8 +449,22 @@ class DataManager:
             with self.lock:
                 ny_tz = pytz.timezone('America/New_York')
                 end_date = datetime.now(ny_tz)
-                years = config.get_int('DEFAULT', 'historical_data_years')
-                start_date = end_date - relativedelta(years=years)
+                
+                # Get the last record timestamp
+                last_timestamp = self.get_last_record_timestamp(ticker_symbol)
+                
+                if last_timestamp:
+                    # If we have data, start from the last record
+                    # Add a small buffer (1 bar) to ensure we don't miss any data
+                    start_date = last_timestamp - timedelta(minutes=5)
+                    self.logger.info(f"Fetching data for {ticker_symbol} from last record: {start_date}")
+                    print(f"Fetching data for {ticker_symbol} from last record: {start_date}")
+                else:
+                    # If no existing data, fetch historical data for configured years
+                    years = config.get_int('DEFAULT', 'historical_data_years')
+                    start_date = end_date - relativedelta(years=years)
+                    self.logger.info(f"No existing data found. Fetching {years} years of historical data for {ticker_symbol}")
+                    print(f"No existing data found. Fetching {years} years of historical data for {ticker_symbol}")
 
                 self.logger.info(f"Fetching historical data for {ticker_symbol}")
 
@@ -444,6 +480,7 @@ class DataManager:
                 else:
                     self.logger.warning(f"No historical data fetched for {ticker_symbol}")
                     print(f"No historical data fetched for {ticker_symbol}")
+                    
         except Exception as e:
             self.logger.error(f"Error fetching data for {ticker_symbol}: {str(e)}")
             print(f"Error fetching data for {ticker_symbol}: {str(e)}")
@@ -465,4 +502,53 @@ class DataManager:
             print(f"Ticker {ticker_symbol} added and data retrieval initiated.")
         else:
             print(f"Ticker {ticker_symbol} was not added.")
+            
+    def get_last_record_timestamp(self, ticker_symbol):
+        """Get the timestamp of the last record for a ticker in the database"""
+        session = db_manager.Session()
+        try:
+            last_record = session.query(HistoricalData)\
+                .filter_by(ticker_symbol=ticker_symbol)\
+                .order_by(HistoricalData.timestamp.desc())\
+                .first()
+            
+            if last_record:
+                # Make sure the timestamp is timezone-aware
+                ny_tz = pytz.timezone('America/New_York')
+                if last_record.timestamp.tzinfo is None:
+                    aware_timestamp = ny_tz.localize(last_record.timestamp)
+                else:
+                    aware_timestamp = last_record.timestamp.astimezone(ny_tz)
+                
+                self.logger.info(f"Found last record for {ticker_symbol} at {aware_timestamp}")
+                print(f"CRITICAL DEBUG: Found last record for {ticker_symbol} at {aware_timestamp}")
+                print(f"CRITICAL DEBUG: Timestamp timezone info: {aware_timestamp.tzinfo}")
+                return aware_timestamp
+            else:
+                self.logger.info(f"No existing records found for {ticker_symbol}")
+                print(f"CRITICAL DEBUG: No existing records found for {ticker_symbol}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error getting last record timestamp for {ticker_symbol}: {str(e)}")
+            print(f"CRITICAL DEBUG: Error getting last record timestamp: {str(e)}")
+            raise
+        finally:
+            session.close()
+            
+    def verify_data_continuity(self, ticker):
+        """Verify there are no gaps in the data and fetch missing data if needed"""
+        try:
+            last_timestamp = self.get_last_record_timestamp(ticker)
+            if last_timestamp:
+                current_time = datetime.now(pytz.timezone('America/New_York'))
+                # Check if we've missed any data (gap larger than 5 minutes during market hours)
+                if (current_time - last_timestamp).total_seconds() > 300:  # 5 minutes
+                    self.logger.info(f"Data gap detected for {ticker}, fetching missing data")
+                    self.fetch_historical_data_for_ticker(ticker)
+        except Exception as e:
+            self.logger.error(f"Error verifying data continuity for {ticker}: {str(e)}")
+            raise
+            
+            
 
