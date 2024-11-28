@@ -77,6 +77,67 @@ class RealTimeDataStreamer:
 
         except Exception as e:
             self.logger.error(f"Error processing bar data: {str(e)}")
+            
+    def update_tickers(self, new_tickers):
+        """Update the list of tickers being streamed."""
+        try:
+            with threading.Lock():
+                current_set = set(self.tickers)
+                new_set = set(new_tickers)
+                
+                success = True
+                # Track changes to allow rollback if needed
+                unsubscribed = set()
+                subscribed = set()
+                
+                # First unsubscribe removed tickers
+                for ticker in current_set - new_set:
+                    try:
+                        self.stream.unsubscribe_bars(ticker)
+                        unsubscribed.add(ticker)
+                        self.logger.info(f"Unsubscribed from {ticker}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to unsubscribe {ticker}: {e}")
+                        success = False
+                        break
+                
+                # Then subscribe new tickers if unsubscribe was successful
+                if success:
+                    for ticker in new_set - current_set:
+                        try:
+                            self.stream.subscribe_bars(self.handle_bar, ticker)
+                            subscribed.add(ticker)
+                            self.logger.info(f"Subscribed to {ticker}")
+                        except Exception as e:
+                            self.logger.error(f"Failed to subscribe {ticker}: {e}")
+                            success = False
+                            break
+                
+                if not success:
+                    # Rollback changes if anything failed
+                    self._rollback_changes(subscribed, unsubscribed)
+                    return False
+                    
+                self.tickers = list(new_set)
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error updating tickers: {e}")
+            return False
+
+    def _rollback_changes(self, subscribed, unsubscribed):
+        """Rollback any changes made during failed update."""
+        for ticker in subscribed:
+            try:
+                self.stream.unsubscribe_bars(ticker)
+            except Exception as e:
+                self.logger.error(f"Rollback: Failed to unsubscribe {ticker}: {e}")
+                
+        for ticker in unsubscribed:
+            try:
+                self.stream.subscribe_bars(self.handle_bar, ticker)
+            except Exception as e:
+                self.logger.error(f"Rollback: Failed to resubscribe {ticker}: {e}")
 
 
     # def _store_bar_data(self, bar):

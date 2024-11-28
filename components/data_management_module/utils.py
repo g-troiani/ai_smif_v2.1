@@ -14,10 +14,3 @@ def append_ticker_to_csv(ticker_symbol, tickers_file_path):
     except Exception as e:
         print(f"Error appending ticker to CSV: {str(e)}")
         return False
-    
-def reload_tickers(self):
-        """Reload tickers from the tickers file dynamically."""
-        with self.lock:
-            self.load_tickers()
-            print("Tickers reloaded.")
-

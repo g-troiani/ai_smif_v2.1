@@ -16,6 +16,13 @@ from sqlalchemy.exc import IntegrityError        # for handling database integri
 import traceback         
 from datetime import datetime, timedelta
 import threading
+import json
+from zmq.error import ZMQError
+import zmq
+from .utils import append_ticker_to_csv # Add this import
+
+
+
 
 
 class DataManager:
@@ -29,8 +36,11 @@ class DataManager:
         self.real_time_streamer = None
         self.logger.info("DataManager initialized.")
         self._last_maintenance = None
-        self.initialize_database()
-        self.start_real_time_streaming()
+        self._running = True        # for clean shutdown
+        self._setup_command_socket() # set up command handling first
+        self.initialize_database()         # Then initialize other components
+        self.start_real_time_streaming()        # Then initialize other components
+        self.logger.info("DataManager initialized.")        # for clean shutdown
 
     def _setup_logging(self):
         """Set up logging for the data manager"""
@@ -52,31 +62,6 @@ class DataManager:
         with open(tickers_file, 'r') as f:
             self.tickers = [line.strip() for line in f if line.strip()]
         self.logger.info(f"Loaded {len(self.tickers)} tickers: {self.tickers}")
-
-    # def _load_tickers(self):
-    #     """Load tickers from the configured CSV file"""
-    #     try:
-    #         tickers_file = Path(config.get('DEFAULT', 'tickers_file'))
-    #         if not tickers_file.exists():
-    #             self.logger.error(f"Tickers file not found: {tickers_file}")
-    #             raise FileNotFoundError(f"Tickers file not found: {tickers_file}")
-                
-    #         df = pd.read_csv(tickers_file)
-    #         if 'ticker' not in df.columns:
-    #             raise ValueError("CSV file must contain a 'ticker' column")
-                
-    #         tickers = df['ticker'].unique().tolist()
-    #         self.logger.info(f"Loaded {len(tickers)} tickers")
-    #         return tickers
-    #     except Exception as e:
-    #         self.logger.error(f"Failed to load tickers: {str(e)}")
-    #         raise
-        
-    # def reload_tickers(self):
-    #     """Reload tickers from the tickers file dynamically."""
-    #     with self.lock:
-    #         self.load_tickers()
-    #         print("Tickers reloaded.")
 
 
     def initialize_database(self):
@@ -305,12 +290,239 @@ class DataManager:
             self.logger.error(f"Failed to validate data integrity: {str(e)}")
             raise
 
+    def _setup_command_socket(self):
+        """Setup ZeroMQ socket for receiving commands"""
+        try:
+            # Add timestamp for precise timing of events
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            startup_msg = f"{current_time} - Starting command socket initialization..."
+            self.logger.info(startup_msg)
+            print(startup_msg)  # Print to console as well
+            
+            # Create new ZMQ context
+            self.command_context = zmq.Context.instance()  # Using singleton instance
+            print("DEBUG: Created ZMQ context")
+            
+            # Create and configure socket
+            self.command_socket = self.command_context.socket(zmq.REP)
+            print("DEBUG: Created REP socket")
+            
+            # Set socket options for better diagnostics
+            self.command_socket.setsockopt(zmq.LINGER, 1000)
+            self.command_socket.setsockopt(zmq.RCVTIMEO, 1000)
+            self.command_socket.setsockopt(zmq.SNDTIMEO, 1000)
+            self.command_socket.setsockopt(zmq.IMMEDIATE, 1)
+            self.command_socket.setsockopt(zmq.IPV6, 0)  # Disable IPv6
+            print("DEBUG: Socket options set")
+            
+            # Try to bind
+            bind_addr = "tcp://*:5556"  # Bind to all interfaces
+            bind_msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')} - Attempting to bind to {bind_addr}"
+            self.logger.info(bind_msg)
+            print(bind_msg)
+            
+            print(f"DEBUG: About to bind socket...")
+            self.command_socket.bind(bind_addr)
+            print(f"DEBUG: Socket bound successfully")
+            
+            # Start command handler thread
+            self._running = True  # Ensure this is set before starting thread
+            self.command_thread = threading.Thread(
+                target=self._handle_commands,
+                daemon=True,
+                name="CommandHandler"
+            )
+            print("DEBUG: Created command handler thread")
+            self.command_thread.start()
+            print("DEBUG: Command handler thread started")
+            
+            # Verify thread started
+            if self.command_thread.is_alive():
+                success_msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')} - Command socket initialized and handler thread started"
+                self.logger.info(success_msg)
+                print(success_msg)
+            else:
+                raise RuntimeError("Command handler thread failed to start")
+                    
+        except zmq.error.ZMQError as e:
+            error_msg = f"ZMQ Error during command socket setup: {str(e)}"
+            self.logger.error(error_msg)
+            print(error_msg)
+            if hasattr(self, 'command_socket'):
+                try:
+                    self.command_socket.close()
+                except Exception as close_error:
+                    self.logger.error(f"Error closing command socket: {str(close_error)}")
+            if hasattr(self, 'command_context'):
+                try:
+                    self.command_context.term()
+                except Exception as term_error:
+                    self.logger.error(f"Error terminating context: {str(term_error)}")
+            raise
+            
+        except Exception as e:
+            error_msg = f"Unexpected error in command socket setup: {str(e)}"
+            self.logger.error(error_msg)
+            print(error_msg)
+            if hasattr(self, 'command_socket'):
+                try:
+                    self.command_socket.close()
+                except Exception as close_error:
+                    self.logger.error(f"Error closing command socket: {str(close_error)}")
+            if hasattr(self, 'command_context'):
+                try:
+                    self.command_context.term()
+                except Exception as term_error:
+                    self.logger.error(f"Error terminating context: {str(term_error)}")
+            raise
+        
+    def _cleanup_command_socket(self):
+        """Clean up command socket resources"""
+        try:
+            if hasattr(self, 'command_socket'):
+                try:
+                    self.command_socket.close()
+                    self.logger.info("Command socket closed")
+                except Exception as e:
+                    self.logger.error(f"Error closing command socket: {str(e)}")
+
+            if hasattr(self, 'command_context'):
+                try:
+                    if isinstance(self.command_context, zmq.Context):
+                        self.command_context.term()
+                        self.logger.info("ZMQ context terminated")
+                except Exception as e:
+                    self.logger.error(f"Error terminating ZMQ context: {str(e)}")
+
+            # Wait for command thread to finish if it exists
+            if hasattr(self, 'command_thread'):
+                try:
+                    if self.command_thread.is_alive():
+                        self._running = False  # Signal thread to stop
+                        self.command_thread.join(timeout=5)
+                        if self.command_thread.is_alive():
+                            self.logger.warning("Command thread did not terminate cleanly")
+                        else:
+                            self.logger.info("Command thread terminated")
+                except Exception as e:
+                    self.logger.error(f"Error joining command thread: {str(e)}")
+
+        except Exception as e:
+            self.logger.error(f"Error during command socket cleanup: {str(e)}")
+            raise
+
+    def _handle_commands(self):
+        """Handle incoming commands"""
+        print("DEBUG: Command handler thread starting...")  # Debug print
+
+        # Set up a poller
+        poller = zmq.Poller()
+        poller.register(self.command_socket, zmq.POLLIN)
+
+        while self._running:
+            try:
+                print("DEBUG: Waiting for command...")  # Debug print
+
+                # Poll the socket for incoming messages
+                socks = dict(poller.poll(1000))  # Wait for 1 second
+                if self.command_socket in socks and socks[self.command_socket] == zmq.POLLIN:
+                    print("DEBUG: Poll returned activity, attempting to receive...")  # Debug print
+                    try:
+                        # Receive the command
+                        command = self.command_socket.recv_json()
+                        print(f"DEBUG: Received command: {command}")  # Debug print
+
+                        response = {'success': False, 'message': ''}
+
+                        if command['type'] == 'add_ticker':
+                            ticker = command.get('ticker')
+                            if ticker:
+                                success = self.add_new_ticker(ticker)
+                                response = {
+                                    'success': success,
+                                    'message': f"Ticker {ticker} {'added successfully' if success else 'failed to add'}"
+                                }
+                            else:
+                                response = {'success': False, 'message': 'No ticker provided'}
+                        else:
+                            response = {'success': False, 'message': 'Unknown command type'}
+
+                        print(f"DEBUG: Sending response: {response}")  # Added debug print
+                        self.command_socket.send_json(response)
+                        self.logger.info(f"Sent response: {response}")
+
+                    except Exception as e:
+                        error_msg = f"Error processing command: {e}"
+                        self.logger.error(error_msg)
+                        print(f"DEBUG: {error_msg}")  # Added debug print
+                        # Attempt to send an error response
+                        try:
+                            self.command_socket.send_json({
+                                'success': False,
+                                'message': f"Error processing command: {str(e)}"
+                            })
+                        except Exception as send_error:
+                            self.logger.error(f"Failed to send error response: {send_error}")
+                        continue  # Keep the thread running
+                else:
+                    # No message received, continue waiting
+                    continue
+
+            except Exception as e:
+                error_msg = f"Unexpected error in command handler: {e}"
+                self.logger.error(error_msg)
+                print(f"DEBUG: {error_msg}")  # Added debug print
+                # Sleep briefly to avoid tight loop in case of persistent error
+                time.sleep(1)
+                continue  # Keep the thread running
+
+    def reload_tickers(self):
+            """Reload tickers from the tickers file dynamically."""
+            with self.lock:
+                self.load_tickers()
+                print("Tickers reloaded.")
+
+                
+                
+    def shutdown(self):
+        """Cleanly shutdown the DataManager"""
+        self._running = False
+        try:
+            # Stop real-time streaming
+            self.stop_real_time_streaming()
+            
+            # Cleanup command socket resources
+            if hasattr(self, 'command_socket'):
+                try:
+                    self.command_socket.close()
+                except Exception as e:
+                    self.logger.error(f"Error closing command socket: {str(e)}")
+                    
+            if hasattr(self, 'command_context'):
+                try:
+                    self.command_context.term()
+                except Exception as e:
+                    self.logger.error(f"Error terminating ZMQ context: {str(e)}")
+                    
+            # Wait for command thread to finish if it exists
+            if hasattr(self, 'command_thread'):
+                try:
+                    if self.command_thread.is_alive():
+                        self.command_thread.join(timeout=5)
+                except Exception as e:
+                    self.logger.error(f"Error joining command thread: {str(e)}")
+                    
+            self.logger.info("DataManager shutdown complete")
+        except Exception as e:
+            self.logger.error(f"Error during shutdown: {str(e)}")
+
     def __del__(self):
         """Cleanup when the object is destroyed"""
         try:
             self.stop_real_time_streaming()
         except Exception as e:
             self.logger.error(f"Error during cleanup: {str(e)}")
+
 
     def get_backtrader_data(self, ticker, start_date, end_date):
         """
@@ -491,17 +703,49 @@ class DataManager:
         
     def add_new_ticker(self, ticker_symbol):
         """Add a new ticker, reload tickers, and fetch historical data."""
-        tickers_file = config.get('DEFAULT', 'tickers_file')
-        ticker_added = append_ticker_to_csv(ticker_symbol, tickers_file)
-        if ticker_added:
-            self.reload_tickers()
-            self.fetch_historical_data_async(ticker_symbol)
-            # Update the real-time streamer
-            if self.real_time_streamer:
-                self.real_time_streamer.update_tickers(self.tickers)
-            print(f"Ticker {ticker_symbol} added and data retrieval initiated.")
-        else:
-            print(f"Ticker {ticker_symbol} was not added.")
+        try:
+            # Validate ticker symbol format first
+            if not self._validate_ticker_symbol(ticker_symbol):
+                self.logger.error(f"Invalid ticker symbol format: {ticker_symbol}")
+                return False
+
+            tickers_file = config.get('DEFAULT', 'tickers_file')
+            ticker_added = append_ticker_to_csv(ticker_symbol, tickers_file)
+            if ticker_added:
+                with self.lock:  # Ensure thread safety
+                    self.reload_tickers()
+                    # Update the real-time streamer first before fetching historical
+                    if self.real_time_streamer:
+                        try:
+                            self.real_time_streamer.update_tickers(self.tickers)
+                            self.logger.info(f"Real-time streaming updated for {ticker_symbol}")
+                        except Exception as e:
+                            self.logger.error(f"Failed to update real-time streaming for {ticker_symbol}: {e}")
+                            # Consider if we should return False here
+                            
+                    # Fetch historical data last since it's async and most likely to fail
+                    self.fetch_historical_data_async(ticker_symbol)
+                    
+                self.logger.info(f"Ticker {ticker_symbol} successfully added and initialization started")
+                return True
+            
+            self.logger.warning(f"Ticker {ticker_symbol} was not added - may already exist")
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Failed to add ticker {ticker_symbol}: {e}")
+            return False
+
+    def _validate_ticker_symbol(self, symbol):
+        """Validate ticker symbol format."""
+        # Basic validation - could be enhanced based on specific requirements
+        if not isinstance(symbol, str):
+            return False
+        if not 1 <= len(symbol) <= 5:  # Standard ticker length
+            return False
+        if not symbol.isalpha():  # Basic check for alphabetic characters
+            return False
+        return True
             
     def get_last_record_timestamp(self, ticker_symbol):
         """Get the timestamp of the last record for a ticker in the database"""
@@ -550,5 +794,5 @@ class DataManager:
             self.logger.error(f"Error verifying data continuity for {ticker}: {str(e)}")
             raise
             
-            
+
 
