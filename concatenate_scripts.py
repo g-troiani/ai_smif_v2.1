@@ -1,3 +1,5 @@
+# File: concatenate_scripts.py
+
 import os
 import chardet
 
@@ -18,6 +20,22 @@ def should_include_file(filename):
     """
     include_extensions = {'.py', '.js', '.css', '.html'}
     return any(filename.endswith(ext) for ext in include_extensions)
+
+def get_comment_syntax(file_type):
+    """
+    Returns the appropriate comment syntax for the given file type.
+    """
+    comment_styles = {
+        'py': '#',
+        'js': '//',
+        'css': '/*',
+        'html': '<!--'
+    }
+    comment_end_styles = {
+        'css': ' */',
+        'html': ' -->'
+    }
+    return comment_styles.get(file_type, '#'), comment_end_styles.get(file_type, '')
 
 def read_file_content(file_path):
     """
@@ -107,27 +125,33 @@ def concatenate_scripts(target_folder, exclude_dirs):
                 for file in sorted(files):
                     if should_include_file(file) and not should_exclude_file(file):
                         file_path = os.path.join(root, file)
-                        outfile.write(f"# File: {file_path}\n")
-                        outfile.write(f"# Type: {os.path.splitext(file)[1][1:]}\n\n")
+                        rel_path = os.path.relpath(file_path)  # Get relative path
+                        file_type = os.path.splitext(file)[1][1:]
+                        comment_start, comment_end = get_comment_syntax(file_type)
+                        
+                        # Add file path and type with appropriate comment syntax
+                        outfile.write(f"{comment_start} File: {rel_path}{comment_end}\n")
+                        outfile.write(f"{comment_start} Type: {file_type}{comment_end}\n\n")
+                        
                         content = read_file_content(file_path)
                         if content is not None:
                             outfile.write(content)
                             outfile.write("\n\n")
                         else:
-                            outfile.write(f"# Error: Unable to read file {file_path}\n\n")
+                            outfile.write(f"{comment_start} Error: Unable to read file {file_path}{comment_end}\n\n")
         print(f"Scripts concatenated into '{output_file_name}'.")
 
 if __name__ == "__main__":
     # Hardcoded target folder and excluded directories
-    target_folder = "ALL_MODULES"
+    target_folder = "components/data_management_module"
     exclude_dirs = [
-        'test',
+        'components/__pycache__',
         'tests',
         'migrations',
         'logs',
-        'node_modules',
+        #'node_modules',
         'components/backtesting_module',
-        'components/data_management_module',
+        #'components/data_management_module',
         'components/integration_communication_module',
         'components/logging_monitoring_module',
         'components/portfolio_management_module',
@@ -135,6 +159,7 @@ if __name__ == "__main__":
         'components/risk_management_module',
         'components/strategy_management_module',
         'components/trading_execution_engine',
+        'components/ui_module/frontend/node_modules',
         '/dist/assets'
     ]  # Directories to exclude
 

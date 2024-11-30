@@ -181,6 +181,31 @@ def internal_error(error):
         'message': 'Internal server error'
     }), 500
 
+@app.route('/api/strategies', methods=['GET'])
+def get_strategies():
+    logger.info("Received request for strategies")
+    try:
+        config_path = os.path.join(project_root, 'config/strategies.json')
+        logger.debug(f"Looking for strategies at: {config_path}")
+        
+        if not os.path.exists(config_path):
+            logger.error(f"Strategies file not found at: {config_path}")
+            return jsonify({
+                'success': False,
+                'message': 'Strategies configuration not found'
+            }), 404
+            
+        with open(config_path, 'r') as f:
+            strategies = json.load(f)
+            logger.info(f"Successfully loaded {len(strategies)} strategies")
+            return jsonify(strategies)
+    except Exception as e:
+        logger.error(f"Error loading strategies: {str(e)}\nTraceback: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
 def initialize_app():
     """Initialize the application with required setup"""
     try:
@@ -202,3 +227,5 @@ if __name__ == '__main__':
 else:
     # Initialize the app when imported as a module
     initialize_app()
+
+logger.debug(f"Flask backend starting with PID: {os.getpid()}")

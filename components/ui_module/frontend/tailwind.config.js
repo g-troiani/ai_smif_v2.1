@@ -26,6 +26,7 @@ export default {
         '96': '24rem',
       },
     },
+    extend: {},
   },
   plugins: [
     require('@tailwindcss/forms'),

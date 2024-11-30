@@ -1,3 +1,6 @@
+# File: generate_project_structure.py
+
+
 import os
 import pathlib
 import logging

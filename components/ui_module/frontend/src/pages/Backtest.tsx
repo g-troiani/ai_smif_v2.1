@@ -1,14 +1,25 @@
-import React from 'react';
+import React, { useState } from 'react';
+import BacktestConfigModal from '../components/BacktestConfigModal';
 
 const Backtest: React.FC = () => {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-900">Backtest</h2>
-        <button className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">
+        <button 
+          onClick={() => setIsModalOpen(true)}
+          className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700"
+        >
           New Backtest
         </button>
       </div>
+
+      <BacktestConfigModal 
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+      />
 
       <div className="bg-white shadow rounded-lg">
         <div className="p-6">

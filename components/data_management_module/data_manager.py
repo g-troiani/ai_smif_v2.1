@@ -20,6 +20,7 @@ import json
 from zmq.error import ZMQError
 import zmq
 from .utils import append_ticker_to_csv # Add this import
+from .database import DatabaseManager
 
 
 
@@ -30,6 +31,7 @@ class DataManager:
 
     def __init__(self):
         self.logger = self._setup_logging()
+        self.db = DatabaseManager()  # Initialize the new DatabaseManager
         self.api_client = AlpacaAPIClient()
         self.lock = threading.RLock()
         self.load_tickers()
@@ -75,7 +77,7 @@ class DataManager:
                 for ticker in self.tickers:
                     print(f"CRITICAL DEBUG: Processing ticker {ticker}")
                     # Get the last record timestamp
-                    last_timestamp = self.get_last_record_timestamp(ticker)
+                    last_timestamp = self.db.get_last_timestamp(ticker)
                     
                     if last_timestamp:
                         # If we have data, start from the last record
@@ -106,8 +108,8 @@ class DataManager:
                     if not historical_data.empty:
                         # Filter data to market hours (9:30 AM to 4:00 PM EST)
                         historical_data = self._filter_market_hours(historical_data, ny_tz)
-                        self._save_historical_data(ticker, historical_data)
-                        print(f"CRITICAL DEBUG: Saved {len(historical_data)} records for {ticker}")
+                        new_records = self.db.save_historical_data(ticker, historical_data)
+                        self.logger.info(f"Saved {new_records} new records for {ticker}")
                     else:
                         print(f"CRITICAL DEBUG: No data to save for {ticker}")
 
@@ -701,41 +703,50 @@ class DataManager:
         """Fetch historical data for a ticker asynchronously."""
         threading.Thread(target=self.fetch_historical_data_for_ticker, args=(ticker_symbol,)).start()
         
-    def add_new_ticker(self, ticker_symbol):
-        """Add a new ticker, reload tickers, and fetch historical data."""
-        try:
-            # Validate ticker symbol format first
-            if not self._validate_ticker_symbol(ticker_symbol):
-                self.logger.error(f"Invalid ticker symbol format: {ticker_symbol}")
+    def add_new_ticker(self, ticker):
+            self.logger.debug(f"Attempting to add ticker: {ticker}")  # Changed from logger to self.logger
+            try:
+                # Log API connection attempt
+                self.logger.debug("Checking API connection")  # Changed
+                
+                # Log ticker validation
+                self.logger.debug(f"Validating ticker {ticker}")  # Changed
+                
+                # Log data retrieval attempt
+                self.logger.debug("Attempting to retrieve ticker data")  # Changed
+                
+                # Validate ticker symbol format first
+                if not self._validate_ticker_symbol(ticker):
+                    self.logger.error(f"Invalid ticker symbol format: {ticker}")
+                    return False
+
+                tickers_file = config.get('DEFAULT', 'tickers_file')
+                ticker_added = append_ticker_to_csv(ticker, tickers_file)
+                if ticker_added:
+                    with self.lock:  # Ensure thread safety
+                        self.reload_tickers()
+                        # Update the real-time streamer first before fetching historical
+                        if self.real_time_streamer:
+                            try:
+                                self.real_time_streamer.update_tickers(self.tickers)
+                                self.logger.info(f"Real-time streaming updated for {ticker}")
+                            except Exception as e:
+                                self.logger.error(f"Failed to update real-time streaming for {ticker}: {e}")
+                                
+                        # Fetch historical data last since it's async and most likely to fail
+                        self.fetch_historical_data_async(ticker)
+                        
+                    self.logger.info(f"Ticker {ticker} successfully added and initialization started")
+                    self.logger.debug(f"Successfully added ticker: {ticker}")  # Changed
+                    return True
+                
+                self.logger.warning(f"Ticker {ticker} was not added - may already exist")
                 return False
-
-            tickers_file = config.get('DEFAULT', 'tickers_file')
-            ticker_added = append_ticker_to_csv(ticker_symbol, tickers_file)
-            if ticker_added:
-                with self.lock:  # Ensure thread safety
-                    self.reload_tickers()
-                    # Update the real-time streamer first before fetching historical
-                    if self.real_time_streamer:
-                        try:
-                            self.real_time_streamer.update_tickers(self.tickers)
-                            self.logger.info(f"Real-time streaming updated for {ticker_symbol}")
-                        except Exception as e:
-                            self.logger.error(f"Failed to update real-time streaming for {ticker_symbol}: {e}")
-                            # Consider if we should return False here
-                            
-                    # Fetch historical data last since it's async and most likely to fail
-                    self.fetch_historical_data_async(ticker_symbol)
-                    
-                self.logger.info(f"Ticker {ticker_symbol} successfully added and initialization started")
-                return True
-            
-            self.logger.warning(f"Ticker {ticker_symbol} was not added - may already exist")
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"Failed to add ticker {ticker_symbol}: {e}")
-            return False
-
+                
+            except Exception as e:
+                self.logger.error(f"Failed to add ticker {ticker}: {str(e)}", exc_info=True)  # Changed
+                return False
+        
     def _validate_ticker_symbol(self, symbol):
         """Validate ticker symbol format."""
         # Basic validation - could be enhanced based on specific requirements
