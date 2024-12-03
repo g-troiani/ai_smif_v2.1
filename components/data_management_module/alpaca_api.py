@@ -52,7 +52,7 @@ class AlpacaAPIClient:
         self._last_request_time = time.time()
 
 
-    def fetch_historical_data(self, ticker, start_date, end_date, timeframe='5Min'):
+    def fetch_historical_data(self, ticker, start_date, end_date, timeframe='1Min'):
         """Fetch historical data with proper formatting"""
         all_data = []
         current_date = start_date
@@ -169,7 +169,7 @@ class AlpacaAPIClient:
             
             bars = self.api.get_bars(
                 ticker,
-                TimeFrame(5, TimeFrame.Unit.Minute),
+                TimeFrame(1, TimeFrame.Unit.Minute),
                 start=start_date.isoformat(),
                 end=end_date.isoformat(),
                 adjustment='raw'

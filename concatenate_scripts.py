@@ -143,7 +143,7 @@ def concatenate_scripts(target_folder, exclude_dirs):
 
 if __name__ == "__main__":
     # Hardcoded target folder and excluded directories
-    target_folder = "components/data_management_module"
+    target_folder = "components/ui_module"
     exclude_dirs = [
         'components/__pycache__',
         'tests',

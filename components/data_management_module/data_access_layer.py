@@ -163,6 +163,24 @@ class DatabaseManager:
             raise
         finally:
             session.close()
+            
+    def get_last_timestamp(self, ticker_symbol):
+        """Get the timestamp of the last record for a ticker in the database."""
+        session = self.Session()
+        try:
+            last_record = session.query(HistoricalData.timestamp)\
+                .filter(HistoricalData.ticker_symbol == ticker_symbol)\
+                .order_by(HistoricalData.timestamp.desc())\
+                .first()
+            if last_record:
+                return last_record[0]
+            else:
+                return None
+        except Exception as e:
+            self.logger.error(f"Error getting last timestamp for {ticker_symbol}: {str(e)}")
+            raise
+        finally:
+            session.close()
 
 # Global database manager instance
 db_manager = DatabaseManager()

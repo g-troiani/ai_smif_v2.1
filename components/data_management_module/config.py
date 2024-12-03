@@ -23,7 +23,7 @@ class DataConfig:
         """Load configuration from config file and environment variables"""
         # Default settings
         self.config['DEFAULT'] = {
-            'database_path': str(self.data_dir / 'data.db'),
+            'database_path': str(self.data_dir / 'market_data.db'),
             'tickers_file': str(self.project_root / 'tickers.csv'),
             'log_file': str(self.log_dir / 'data_manager.log'),
             'historical_data_years': '5',

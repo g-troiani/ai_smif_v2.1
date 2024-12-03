@@ -35,7 +35,7 @@ class RealTimeDataStreamer:
         self._running = False
         self._last_prices = {}
         self._last_update = {}
-        self._interval = timedelta(minutes=5)
+        self._interval = timedelta(minutes=1)
 
     def _setup_logging(self):
         """Set up logging for the real-time data streamer"""
@@ -64,16 +64,17 @@ class RealTimeDataStreamer:
             # Get the minute of the timestamp
             minute = bar.timestamp.minute
 
+            # UNCOMMENT THIS TO STORE 5 MINUTE BARS
             # Check if the minute is a multiple of 5
-            if minute % 5 == 0:
-                # Process the bar
-                self._store_bar_data(bar)
-                self._publish_bar_data(bar)
-                self._last_update[bar.symbol] = bar.timestamp
-                self._last_prices[bar.symbol] = bar.close
-            else:
-                # Do not process the bar
-                pass
+            # if minute % 5 == 0:
+            #     # Process the bar
+            #     self._store_bar_data(bar)
+            #     self._publish_bar_data(bar)
+            #     self._last_update[bar.symbol] = bar.timestamp
+            #     self._last_prices[bar.symbol] = bar.close
+            # else:
+            #     # Do not process the bar
+            #     pass
 
         except Exception as e:
             self.logger.error(f"Error processing bar data: {str(e)}")
@@ -139,30 +140,6 @@ class RealTimeDataStreamer:
             except Exception as e:
                 self.logger.error(f"Rollback: Failed to resubscribe {ticker}: {e}")
 
-
-    # def _store_bar_data(self, bar):
-    #     """Store bar data in the database"""
-    #     try:
-    #         record = HistoricalData(
-    #             ticker_symbol=bar.symbol,
-    #             timestamp=bar.timestamp,
-    #             open=bar.open,
-    #             high=bar.high,
-    #             low=bar.low,
-    #             close=bar.close,
-    #             volume=bar.volume
-    #         )
-            
-    #         session = db_manager.Session()
-    #         try:
-    #             session.add(record)
-    #             session.commit()
-    #             self.logger.debug(f"Stored bar data for {bar.symbol}")
-    #         finally:
-    #             session.close()
-                
-    #     except Exception as e:
-    #         self.logger.error(f"Failed to store bar data: {str(e)}")
     
     def _store_bar_data(self, bar):
         """Store bar data in the database"""
