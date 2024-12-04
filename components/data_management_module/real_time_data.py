@@ -60,6 +60,7 @@ class RealTimeDataStreamer:
 
             # Convert bar.timestamp from nanoseconds to datetime
             bar.timestamp = datetime.datetime.fromtimestamp(bar.timestamp / 1e9, tz=pytz.UTC)
+            #bar.timestamp = datetime.datetime.fromtimestamp(bar.timestamp / 1e9, tz=pytz.UTC)
 
             # Get the minute of the timestamp
             minute = bar.timestamp.minute

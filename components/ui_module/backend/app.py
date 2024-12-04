@@ -14,7 +14,7 @@ import os
 import logging
 import requests
 from flask import jsonify
-
+import pytz
 
 # Configure logging with more detailed formatting
 logging.basicConfig(
@@ -359,42 +359,139 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
-@app.route('/api/dashboard-data', methods=['GET'])
-def get_dashboard_data():
-    """Endpoint to get dashboard metrics from Alpaca"""
-    logger.debug("Received request for /api/dashboard-data")
+@app.route('/api/portfolio/history', methods=['GET'])
+def get_portfolio_history():
+    """Get historical portfolio value data based on time period"""
     try:
-        # Base URL for paper trading
-        base_url = "https://paper-api.alpaca.markets"
+        # Get time period from query parameter (default to 1M)
+        period = request.args.get('period', '1M')
         
+        # Convert period to Alpaca's format (Y -> 12M)
+        if period == '1Y':
+            period = '12M'
+        elif period == 'ALL':
+            period = '60M'  # 5 years
+        
+        # Configure Alpaca API request
+        base_url = "https://paper-api.alpaca.markets"
         headers = {
             "APCA-API-KEY-ID": os.getenv('APCA_API_KEY_ID'),
             "APCA-API-SECRET-KEY": os.getenv('APCA_API_SECRET_KEY'),
             "accept": "application/json"
         }
         
-        logger.debug(f"Headers for Alpaca API: {headers}")
+        # Set proper timeframe based on period according to Alpaca's rules
+        params = {
+            'extended_hours': 'true'
+        }
+        
+        # Map timeframes based on period
+        if period == '1D':
+            params['timeframe'] = '5Min'
+        elif period == '1W':
+            params['timeframe'] = '15Min'
+        else:
+            params['timeframe'] = '1D'  # Use 1D for all longer periods
+        
+        # Add period parameter
+        params['period'] = period
+        
+        logger.info(f"Requesting portfolio history with params: {params}")
+        
+        response = requests.get(
+            f"{base_url}/v2/account/portfolio/history",
+            headers=headers,
+            params=params
+        )
+        
+        if not response.ok:
+            logger.error(f"Alpaca API error response: {response.text}")
+            response.raise_for_status()
+            
+        history_data = response.json()
+        
+        # Process and format data for frontend
+        timestamps = history_data.get('timestamp', [])
+        equity = history_data.get('equity', [])
+        base_value = history_data.get('base_value', 0)
+        
+        formatted_data = []
+        est_tz = pytz.timezone('America/New_York')
+        
+        for timestamp, value in zip(timestamps, equity):
+            if value is not None:  # Skip any null values
+                dt = datetime.fromtimestamp(timestamp, pytz.UTC)
+                dt_est = dt.astimezone(est_tz)
+                formatted_data.append({
+                    'date': dt_est.isoformat(),
+                    'value': float(value)
+                })
+        
+        # Calculate percentage change using base_value from Alpaca if available
+        if len(formatted_data) >= 2:
+            start_value = base_value if base_value else formatted_data[0]['value']
+            end_value = formatted_data[-1]['value']
+            percentage_change = ((end_value - start_value) / start_value) * 100 if start_value else 0
+        else:
+            percentage_change = 0
+            
+        response_data = {
+            'success': True,
+            'data': {
+                'history': formatted_data,
+                'currentBalance': formatted_data[-1]['value'] if formatted_data else 0,
+                'percentageChange': round(percentage_change, 2)
+            }
+        }
+        
+        return jsonify(response_data)
+        
+    except requests.exceptions.RequestException as e:
+        error_details = e.response.text if hasattr(e, 'response') else 'No response details'
+        logger.error(f"Alpaca API error response: {error_details}")
+        logger.error(f"Error fetching portfolio history from Alpaca: {str(e)}")
+        logger.error(f"Full error details: {error_details}")
+        return jsonify({
+            'success': False,
+            'message': f"API error: {str(e)}"
+        }), 500
+    except Exception as e:
+        logger.error(f"Error processing portfolio history: {str(e)}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+        
+        
+@app.route('/api/dashboard-data', methods=['GET'])
+def get_dashboard_data():
+    """Endpoint to get dashboard metrics from Alpaca"""
+    try:
+        # Base URL for paper trading
+        base_url = "https://paper-api.alpaca.markets"
+        headers = {
+            "APCA-API-KEY-ID": os.getenv('APCA_API_KEY_ID'),
+            "APCA-API-SECRET-KEY": os.getenv('APCA_API_SECRET_KEY'),
+            "accept": "application/json"
+        }
         
         # Get account info
         account_response = requests.get(
             f"{base_url}/v2/account",
             headers=headers
         )
-        logger.debug(f"Alpaca API response status: {account_response.status_code}")
         account_response.raise_for_status()
         account = account_response.json()
-        logger.debug(f"Account data retrieved: {account}")
         
         # Calculate metrics
         equity = float(account.get('equity', 0))
         cash = float(account.get('cash', 0))
-        last_equity = float(account.get('last_equity', equity))  # Fallback to equity if last_equity is not available
+        last_equity = float(account.get('last_equity', equity))
         today_pl = equity - last_equity
         today_return = (today_pl / last_equity) * 100 if last_equity != 0 else 0
         
-        logger.debug(f"Calculated Metrics - Equity: {equity}, Cash: {cash}, Today's P/L: {today_pl}, Today's Return: {today_return}")
-        
-        response_data = {
+        return jsonify({
             'success': True,
             'data': {
                 'account_balance': equity,
@@ -402,19 +499,16 @@ def get_dashboard_data():
                 'today_pl': today_pl,
                 'today_return': today_return
             }
-        }
-        logger.debug(f"Response Data: {response_data}")
-        
-        return jsonify(response_data)
+        })
         
     except requests.exceptions.RequestException as e:
-        logger.error(f"RequestException: Error fetching account data from Alpaca: {str(e)}")
+        logger.error(f"Error fetching account data from Alpaca: {str(e)}")
         return jsonify({
             'success': False,
             'message': f"API error: {str(e)}"
         }), 500
     except Exception as e:
-        logger.error(f"Exception: Error fetching dashboard data: {str(e)}")
+        logger.error(f"Error fetching dashboard data: {str(e)}")
         return jsonify({
             'success': False,
             'message': str(e)

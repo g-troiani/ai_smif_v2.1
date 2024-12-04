@@ -653,9 +653,11 @@ class DataManager:
                     last_timestamp = db_manager.get_last_timestamp(ticker)
                     
                     if last_timestamp:
-                        # If we have data, start from the last record
-                        # Add a small buffer (1 bar) to ensure we don't miss any data
-                        start_date = last_timestamp - timedelta(minutes=1)
+                        # Make naive datetime timezone-aware before comparison
+                        if last_timestamp.tzinfo is None:
+                            start_date = ny_tz.localize(last_timestamp - timedelta(minutes=1))
+                        else:
+                            start_date = last_timestamp - timedelta(minutes=1)
                         print(f"CRITICAL DEBUG: Found last record for {ticker}, starting from {start_date}")
                         print(f"CRITICAL DEBUG: Start date timezone info: {start_date.tzinfo}")
                     else:
@@ -697,7 +699,3 @@ class DataManager:
             self.logger.error(f"Error initializing database: {str(e)}")
             print(f"CRITICAL DEBUG: Error during initialization: {str(e)}")
             raise
-
-            
-
-
