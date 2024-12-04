@@ -1,5 +1,6 @@
 import React from 'react';
 import CurrentPositions from '../components/portfolio/CurrentPositions';
+import RecentTrades from '../components/portfolio/RecentTrades';
 
 const Portfolio: React.FC = () => {
   return (
@@ -16,7 +17,7 @@ const Portfolio: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="flex flex-col space-y-6">
         <div className="bg-white shadow rounded-lg p-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Current Positions</h3>
           <CurrentPositions />
@@ -24,7 +25,7 @@ const Portfolio: React.FC = () => {
 
         <div className="bg-white shadow rounded-lg p-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Recent Trades</h3>
-          <div className="text-gray-500">No recent trades</div>
+          <RecentTrades />
         </div>
       </div>
     </div>

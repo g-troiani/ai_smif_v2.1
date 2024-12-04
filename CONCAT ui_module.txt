@@ -1,3 +1,152 @@
+# Module: components/ui_module
+
+# File: components/ui_module/__init__.py
+# Type: py
+
+
+
+# File: components/ui_module/config.py
+# Type: py
+
+# components/ui_module/config.py
+import os
+from secrets import token_hex
+
+SECRET_KEY = os.environ.get('SECRET_KEY') or token_hex(16)
+DEBUG = True  # For development only
+
+# File: components/ui_module/socketio_events.py
+# Type: py
+
+# components/ui_module/socketio_events.py
+from app import socketio
+from datetime import datetime
+
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
+
+def send_update(data):
+    socketio.emit('update', data)
+
+def send_alert(message):
+    socketio.emit('alert', {'message': message})
+
+def send_data_status(status, last_update):
+    socketio.emit('data_status', {
+        'status': status,
+        'last_update': last_update
+    })
+    
+def send_data_update(status):
+    socketio.emit('data_update', {
+        'status': status,
+        'timestamp': datetime.now().isoformat()
+    })
+
+<!-- File: components/ui_module/frontend/index.html -->
+<!-- Type: html -->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/jpg" href="/favicon.jpg">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI SMIF V2 Trading System</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+// File: components/ui_module/frontend/postcss.config.js
+// Type: js
+
+/** @type {import('postcss').Config} */
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+// File: components/ui_module/frontend/tailwind.config.js
+// Type: js
+
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        primary: {
+          50: '#f0f9ff',
+          100: '#e0f2fe',
+          200: '#bae6fd',
+          300: '#7dd3fc',
+          400: '#38bdf8',
+          500: '#0ea5e9',
+          600: '#0284c7',
+          700: '#0369a1',
+          800: '#075985',
+          900: '#0c4a6e',
+        },
+      },
+      spacing: {
+        '72': '18rem',
+        '84': '21rem',
+        '96': '24rem',
+      },
+    },
+    extend: {},
+  },
+  plugins: [
+    require('@tailwindcss/forms'),
+  ],
+}
+
+/* File: components/ui_module/frontend/src/index.css */
+/* Type: css */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-100;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-lg shadow-sm p-6;
+  }
+  
+  .btn-primary {
+    @apply bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition-colors;
+  }
+  
+  .btn-danger {
+    @apply bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors;
+  }
+}
+
+# File: components/ui_module/backend/app.py
+# Type: py
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
@@ -9,12 +158,6 @@ import json
 from pathlib import Path
 import traceback
 from datetime import datetime, timedelta
-from alpaca_trade_api.rest import REST
-import os
-import logging
-import requests
-from flask import jsonify
-
 
 # Configure logging with more detailed formatting
 logging.basicConfig(
@@ -227,199 +370,6 @@ def initialize_app():
         logger.error(f"Error initializing application: {str(e)}")
         raise
 
-
-@app.route('/api/positions', methods=['GET'])
-def get_positions():
-    """Endpoint to get current positions from Alpaca"""
-    try:
-        logger.info("Attempting to fetch positions")
-        
-        # Alpaca API configuration
-        url = "https://paper-api.alpaca.markets/v2/positions"
-        headers = {
-            "accept": "application/json",
-            "APCA-API-KEY-ID": os.getenv('APCA_API_KEY_ID'),
-            "APCA-API-SECRET-KEY": os.getenv('APCA_API_SECRET_KEY')
-        }
-        
-        # Make the request
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()  # Raise an error for bad status codes
-        
-        # Parse the response
-        positions = response.json()
-        
-        # Format positions data
-        positions_data = [{
-            'symbol': pos['symbol'],
-            'qty': float(pos['qty']),
-            'avgEntryPrice': float(pos['avg_entry_price']),
-            'marketValue': float(pos['market_value']),
-            'currentPrice': float(pos['current_price']),
-            'unrealizedPL': float(pos['unrealized_pl']),
-            'unrealizedPLPercent': float(pos['unrealized_plpc']),
-            'change': float(pos['change_today'])
-        } for pos in positions]
-        
-        logger.info(f"Successfully retrieved {len(positions_data)} positions")
-        return jsonify({
-            'success': True,
-            'positions': positions_data
-        })
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching positions from Alpaca: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f"API error: {str(e)}"
-        }), 500
-    except Exception as e:
-        logger.error(f"Error processing positions data: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500    
-
-@app.route('/api/recent-trades', methods=['GET'])
-def get_recent_trades():
-    """Endpoint to get recent trades from Alpaca"""
-    try:
-        logger.info("Attempting to fetch recent trades")
-        
-        base_url = "https://paper-api.alpaca.markets"
-        endpoint = "/v2/account/activities/FILL"
-        
-        headers = {
-            "APCA-API-KEY-ID": os.getenv('APCA_API_KEY_ID'),
-            "APCA-API-SECRET-KEY": os.getenv('APCA_API_SECRET_KEY'),
-            "accept": "application/json"
-        }
-        
-        params = {
-            "direction": "desc",  # Most recent first
-            "page_size": 20      # Limit to 15 trades
-        }
-        
-        logger.info("Making request to Alpaca API")
-        response = requests.get(
-            f"{base_url}{endpoint}", 
-            headers=headers,
-            params=params
-        )
-        
-        response.raise_for_status()
-        trades = response.json()
-        
-        logger.info(f"Retrieved {len(trades)} trades")
-        
-        # Format the trade data for frontend consumption
-        formatted_trades = []
-        for trade in trades:
-            formatted_trade = {
-                'symbol': trade['symbol'],
-                'side': trade['side'],
-                'qty': float(trade['qty']),
-                'price': float(trade['price']),
-                'time': trade['transaction_time'],
-                'order_id': trade['order_id'],
-                'total_value': float(trade['qty']) * float(trade['price'])
-            }
-            formatted_trades.append(formatted_trade)
-        
-        logger.info("Successfully formatted trade data")
-        return jsonify({
-            'success': True,
-            'trades': formatted_trades
-        })
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching trades from Alpaca: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f"API error: {str(e)}"
-        }), 500
-    except Exception as e:
-        logger.error(f"Unexpected error processing trades: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
-
-
-
-# Create console handler and set level to DEBUG
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-
-# Create formatter and add it to the handler
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-
-# Add the handler to the logger
-logger.addHandler(ch)
-
-
-@app.route('/api/dashboard-data', methods=['GET'])
-def get_dashboard_data():
-    """Endpoint to get dashboard metrics from Alpaca"""
-    logger.debug("Received request for /api/dashboard-data")
-    try:
-        # Base URL for paper trading
-        base_url = "https://paper-api.alpaca.markets"
-        
-        headers = {
-            "APCA-API-KEY-ID": os.getenv('APCA_API_KEY_ID'),
-            "APCA-API-SECRET-KEY": os.getenv('APCA_API_SECRET_KEY'),
-            "accept": "application/json"
-        }
-        
-        logger.debug(f"Headers for Alpaca API: {headers}")
-        
-        # Get account info
-        account_response = requests.get(
-            f"{base_url}/v2/account",
-            headers=headers
-        )
-        logger.debug(f"Alpaca API response status: {account_response.status_code}")
-        account_response.raise_for_status()
-        account = account_response.json()
-        logger.debug(f"Account data retrieved: {account}")
-        
-        # Calculate metrics
-        equity = float(account.get('equity', 0))
-        cash = float(account.get('cash', 0))
-        last_equity = float(account.get('last_equity', equity))  # Fallback to equity if last_equity is not available
-        today_pl = equity - last_equity
-        today_return = (today_pl / last_equity) * 100 if last_equity != 0 else 0
-        
-        logger.debug(f"Calculated Metrics - Equity: {equity}, Cash: {cash}, Today's P/L: {today_pl}, Today's Return: {today_return}")
-        
-        response_data = {
-            'success': True,
-            'data': {
-                'account_balance': equity,
-                'cash_available': cash,
-                'today_pl': today_pl,
-                'today_return': today_return
-            }
-        }
-        logger.debug(f"Response Data: {response_data}")
-        
-        return jsonify(response_data)
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"RequestException: Error fetching account data from Alpaca: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f"API error: {str(e)}"
-        }), 500
-    except Exception as e:
-        logger.error(f"Exception: Error fetching dashboard data: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
-
 if __name__ == '__main__':
     initialize_app()
     app.run(host='0.0.0.0', port=5000, debug=True)
@@ -428,3 +378,4 @@ else:
     initialize_app()
 
 logger.debug(f"Flask backend starting with PID: {os.getpid()}")
+

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowUpIcon, ArrowDownIcon } from 'lucide-react';
 
 interface Position {
   symbol: string;
@@ -96,14 +95,8 @@ const CurrentPositions: React.FC = () => {
                 ${position.unrealizedPL.toLocaleString(undefined, { minimumFractionDigits: 2 })}
               </td>
               <td className={`px-3 py-2 whitespace-nowrap text-sm text-right ${position.unrealizedPLPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                <div className="flex items-center justify-end">
-                  {position.unrealizedPLPercent >= 0 ? (
-                    <ArrowUpIcon className="h-4 w-4 mr-1" />
-                  ) : (
-                    <ArrowDownIcon className="h-4 w-4 mr-1" />
-                  )}
-                  {Math.abs(position.unrealizedPLPercent).toFixed(2)}%
-                </div>
+                {position.unrealizedPLPercent >= 0 ? '+' : ''}
+                {position.unrealizedPLPercent.toFixed(2)}%
               </td>
             </tr>
           ))}
