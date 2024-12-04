@@ -1,4 +1,5 @@
 import React from 'react';
+import CurrentPositions from '../components/portfolio/CurrentPositions';
 
 const Portfolio: React.FC = () => {
   return (
@@ -18,7 +19,7 @@ const Portfolio: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white shadow rounded-lg p-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Current Positions</h3>
-          <div className="text-gray-500">No open positions</div>
+          <CurrentPositions />
         </div>
 
         <div className="bg-white shadow rounded-lg p-6">
